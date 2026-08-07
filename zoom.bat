@@ -1,0 +1,1 @@
+@python "C:\Users\PC\OneDrive\Desktop\zoom-yapayzeka\main.py" %*
