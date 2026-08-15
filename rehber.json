@@ -1,13 +1,14 @@
 {
-    "8._sınıf_dahiler_matematik_berrak_topçu": {
+    "8._sınıf_dahiler_etüt_kenan_başsedir": {
         "sinif": "8. Sınıf",
         "grup": "Dahiler",
-        "ders": "Matematik",
-        "ogretmen": "Berrak Topçu",
-        "id": "851 393 7753",
+        "ders": "Etüt",
+        "ogretmen": "Kenan Başsedir",
+        "id": "310 531 0751",
         "sifre": "9872",
-        "gun": "Pazartesi",
-        "alarm": "21:40",
+        "gun": "Her Gün",
+        "alarm": "16:09",
+        "bitis_saati": "19:49",
         "manual_alarm": false
     }
 }

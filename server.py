@@ -8,9 +8,16 @@ import urllib.parse
 import csv
 import io
 from datetime import datetime, timedelta
-import pyautogui
-import pyperclip
 
+# PyAutoGUI ve Pyperclip kontrolleri
+try:
+    import pyautogui
+    import pyperclip
+    GUI_AUTOMATION_AVAILABLE = True
+except ImportError:
+    GUI_AUTOMATION_AVAILABLE = False
+
+# PyCAW Ses Denetimi Kontrolü
 try:
     from ctypes import cast, POINTER
     from comtypes import CLSCTX_ALL
@@ -20,14 +27,41 @@ except ImportError:
     PYCAW_AVAILABLE = False
 
 app = Flask(__name__)
-app.secret_key = 'zoom_admin_gizli_anahtar_999_v2'
+app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'zoom_admin_gizli_anahtar_999_v2')
 
 ADMIN_USERNAME = "admin"
-
 ESKI_SES_SEVIYESI = None
 ESKI_MUTE_DURUMU = False
 
+# Dosya okuma/yazma çakışmalarını önlemek için thread kilidi
+FILE_LOCK = threading.Lock()
+
+def veri_yukle(dosya):
+    """JSON dosyasından veriyi güvenli şekilde okur."""
+    with FILE_LOCK:
+        try:
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            path = os.path.join(script_dir, dosya)
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+        except Exception as e:
+            print(f"[HATA] Veri yüklenemedi ({dosya}): {e}")
+        return [] if "katilimlar" in dosya else {}
+
+def veri_kaydet(dosya, data):
+    """JSON dosyasına veriyi güvenli şekilde yazar."""
+    with FILE_LOCK:
+        try:
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            path = os.path.join(script_dir, dosya)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=4)
+        except Exception as e:
+            print(f"[HATA] Veri kaydedilemedi ({dosya}): {e}")
+
 def sistem_sesini_ayarla(fulle=True):
+    """Sistem ses seviyesini ayarlar."""
     global ESKI_SES_SEVIYESI, ESKI_MUTE_DURUMU
     if not PYCAW_AVAILABLE:
         return
@@ -48,10 +82,11 @@ def sistem_sesini_ayarla(fulle=True):
                 volume.SetMasterVolumeLevelScalar(ESKI_SES_SEVIYESI, None)
                 volume.SetMute(ESKI_MUTE_DURUMU, None)
                 ESKI_SES_SEVIYESI = None
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[HATA] Ses ayarlanamadı: {e}")
 
 def whatsapp_mesaj_gonder(telefon, mesaj):
+    """WhatsApp Web üzerinden otomatik mesaj yönlendirmesi açar."""
     if not telefon:
         return
     temiz_tel = ''.join(filter(str.isdigit, str(telefon)))
@@ -60,7 +95,10 @@ def whatsapp_mesaj_gonder(telefon, mesaj):
     
     encoded_msg = urllib.parse.quote(mesaj)
     url = f"https://web.whatsapp.com/send?phone={temiz_tel}&text={encoded_msg}"
-    webbrowser.open(url)
+    try:
+        webbrowser.open(url)
+    except Exception as e:
+        print(f"[HATA] WhatsApp açılamadı: {e}")
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -124,7 +162,7 @@ HTML_TEMPLATE = """
         .btn-export { background-color: #059669; }
 
         .form-box { background: #0f172a; padding: 18px; border-radius: 12px; margin-bottom: 25px; border: 1px solid #334155; }
-        .form-row { display: flex; gap: 10px; margin-bottom: 10px; }
+        .form-row { display: flex; gap: 10px; margin-bottom: 10px; align-items: center; }
         input, select { width: 100%; background-color: #1e293b; border: 1px solid #475569; color: white; padding: 10px; border-radius: 8px; outline: none; }
         
         .log-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; }
@@ -153,7 +191,7 @@ HTML_TEMPLATE = """
 <body>
 
 <div id="alarmBanner" class="alarm-banner">
-    🚨 <span id="alarmBannerText">DERS ALARMI! DERSİN BAŞLAMASINA 5 DAKİKA KALDI!</span>
+    🚨 <span id="alarmBannerText">DERS ALARMI! DERSİN BAŞLAMASINA 5 DAKİKA KALDI! (10 sn)</span>
 </div>
 
 {% if not current_user %}
@@ -244,7 +282,7 @@ HTML_TEMPLATE = """
                         </h4>
                         <div class="ogretmen-adi">👨‍🏫 {{ bilgi.ogretmen|title }}</div>
                         <p><b>Zoom ID:</b> {{ bilgi.id }}</p>
-                        <p>⏰ <b>Gün:</b> {{ bilgi.gun|default('Her Gün') }} - <b>Saat:</b> {{ bilgi.alarm if bilgi.alarm else 'Ayar Yok' }}</p>
+                        <p>⏰ <b>Gün:</b> {{ bilgi.gun|default('Her Gün') }} - <b>Saat:</b> {{ bilgi.alarm if bilgi.alarm else 'Ayar Yok' }} {% if bilgi.bitis_saati %}- {{ bilgi.bitis_saati }}{% endif %}</p>
                     </div>
                     <div class="actions">
                         <button type="button" class="btn btn-join" onclick="katil('{{ kisi }}')">🎥 Katıl</button>
@@ -256,7 +294,7 @@ HTML_TEMPLATE = """
                                 {% if bilgi.manual_alarm %}🔔 Alarmı Kapat{% else %}🔔 Alarm Ver{% endif %}
                             </button>
                             <button type="button" class="btn btn-edit" title="Düzenle" 
-                                    onclick="duzenleModalAc('{{ kisi }}', '{{ bilgi.sinif }}', '{{ bilgi.grup }}', '{{ bilgi.ders }}', '{{ bilgi.ogretmen }}', '{{ bilgi.id }}', '{{ bilgi.sifre }}', '{{ bilgi.gun|default('Her Gün') }}', '{{ bilgi.alarm|default('') }}')">✏️</button>
+                                    onclick="duzenleModalAc('{{ kisi }}', '{{ bilgi.sinif }}', '{{ bilgi.grup }}', '{{ bilgi.ders }}', '{{ bilgi.ogretmen }}', '{{ bilgi.id }}', '{{ bilgi.sifre }}', '{{ bilgi.gun|default('Her Gün') }}', '{{ bilgi.alarm|default('') }}', '{{ bilgi.bitis_saati|default('') }}')">✏️</button>
                             <button type="button" class="btn btn-delete" title="Sil" onclick="sil('{{ kisi }}')">🗑️</button>
                         {% endif %}
                     </div>
@@ -334,28 +372,34 @@ HTML_TEMPLATE = """
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
                 <h4 style="margin: 0; color: #ef4444;">📋 Tüm Devamsızlık ve Katılım Logları</h4>
                 <div style="display:flex; gap:8px;">
-                    <a href="/katilim_csv" class="btn btn-export" style="font-size:12px; padding:6px 12px;">📥 CSV İndir</a>
+                    <a href="/katilim_excel" class="btn btn-export" style="font-size:12px; padding:6px 12px;">📥 Excel / CSV İndir</a>
                     <button class="btn btn-delete" style="font-size:12px; padding:6px 12px;" onclick="katilimlariTemizle()">🗑️ Logları Temizle</button>
                 </div>
             </div>
-            <div style="max-height: 300px; overflow-y: auto;">
+            <div style="max-height: 350px; overflow-y: auto;">
                 <table class="log-table">
                     <thead>
                         <tr>
-                            <th>Tarih / Saat</th>
                             <th>Öğrenci</th>
                             <th>Sınıf / Grup</th>
+                            <th>Tarih</th>
+                            <th>Ders Saati</th>
+                            <th>Giriş Saati</th>
                             <th>Ders</th>
+                            <th>Öğretmen</th>
                             <th>Durum</th>
                         </tr>
                     </thead>
                     <tbody>
                         {% for k in katilimlar|reverse %}
                         <tr class="log-row" data-sinif-grup="{{ k.ogrenci_sinif_grup }}">
-                            <td>{{ k.tarih }} - {{ k.saat }}</td>
                             <td><b>{{ k.kullanici.upper() }}</b></td>
                             <td><span class="badge" style="margin:0;">{{ k.ogrenci_sinif_grup }}</span></td>
+                            <td>{{ k.tarih }}</td>
+                            <td><code>{{ k.ders_saati|default('--:--') }}</code></td>
+                            <td><code>{{ k.saat }}</code></td>
                             <td>{{ k.ders }}</td>
+                            <td>{{ k.ogretmen }}</td>
                             <td>
                                 {% if k.durum == 'DEVAMSIZ' %}
                                     <span class="tag-devamsiz">DEVAMSIZ</span>
@@ -367,7 +411,7 @@ HTML_TEMPLATE = """
                             </td>
                         </tr>
                         {% else %}
-                        <tr><td colspan="5" style="text-align:center; color:#94a3b8;">Henüz verilmiş bir devamsızlık veya katılım kaydı bulunmuyor.</td></tr>
+                        <tr><td colspan="8" style="text-align:center; color:#94a3b8;">Henüz verilmiş bir devamsızlık veya katılım kaydı bulunmuyor.</td></tr>
                         {% endfor %}
                     </tbody>
                 </table>
@@ -375,7 +419,7 @@ HTML_TEMPLATE = """
         </div>
 
         <div class="form-box">
-            <h4 style="margin: 0 0 12px 0; color: #38bdf8;">📚 Admin Özel: Yeni Ders Programı Saat Ekle</h4>
+            <h4 style="margin: 0 0 12px 0; color: #38bdf8;">📚 Admin Özel: Yeni Ders Programı Ekle</h4>
             <div class="form-row">
                 <select id="yeni_sinif">
                     <option value="8. Sınıf" selected>8. Sınıf</option>
@@ -403,7 +447,16 @@ HTML_TEMPLATE = """
                     <option value="Çarşamba">Çarşamba</option><option value="Perşembe">Perşembe</option>
                     <option value="Cuma">Cuma</option><option value="Cumartesi">Cumartesi</option><option value="Pazar">Pazar</option>
                 </select>
-                <input type="time" id="yeni_alarm">
+            </div>
+            <div class="form-row">
+                <div style="width:50%;">
+                    <span style="font-size:12px; color:#94a3b8;">Ders Başlangıç Saati:</span>
+                    <input type="time" id="yeni_alarm">
+                </div>
+                <div style="width:50%;">
+                    <span style="font-size:12px; color:#94a3b8;">Ders Bitiş Saati:</span>
+                    <input type="time" id="yeni_bitis_saati">
+                </div>
             </div>
             <button type="button" class="btn btn-add" onclick="ekle()">Ders Programına Ekle</button>
         </div>
@@ -449,7 +502,16 @@ HTML_TEMPLATE = """
                 <option value="Çarşamba">Çarşamba</option><option value="Perşembe">Perşembe</option>
                 <option value="Cuma">Cuma</option><option value="Cumartesi">Cumartesi</option><option value="Pazar">Pazar</option>
             </select>
-            <input type="time" id="edit_alarm">
+        </div>
+        <div class="form-row">
+            <div style="width:50%;">
+                <span style="font-size:12px; color:#94a3b8;">Ders Başlangıç Saati:</span>
+                <input type="time" id="edit_alarm">
+            </div>
+            <div style="width:50%;">
+                <span style="font-size:12px; color:#94a3b8;">Ders Bitiş Saati:</span>
+                <input type="time" id="edit_bitis_saati">
+            </div>
         </div>
         <div style="display:flex; gap:10px; margin-top:15px;">
             <button class="btn btn-add" style="margin:0;" onclick="duzenleKaydet()">Güncelle ve Kaydet</button>
@@ -461,6 +523,13 @@ HTML_TEMPLATE = """
 <script>
     let myChart = null;
     let aktifSekmeGrup = 'hepsi';
+    let manualAlarmTetiklendi = false; 
+
+    let alarmKalanSaniye = 0;
+    let alarmCountdownTimer = null;
+    let calmisAlarmlar = new Set();
+    let audioCtx = null;
+    let alarmInterval = null;
 
     function saatiGuncelle() {
         const now = new Date();
@@ -471,60 +540,87 @@ HTML_TEMPLATE = """
         const secs = String(now.getSeconds()).padStart(2, '0');
         document.getElementById('liveClock').innerText = `${bugun} | ${hrs}:${mins}:${secs}`;
         
-        otomatikAlarmVeDevamsizlikKontrol(bugun, hrs, mins);
+        otomatikAlarmVeDevamsizlikKontrol(bugun, hrs, mins, secs);
     }
     setInterval(saatiGuncelle, 1000);
 
-    let audioCtx = null;
-    let alarmInterval = null;
-
     function alarmSesiCal() {
-        if (!audioCtx) { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
-        const osc = audioCtx.createOscillator();
-        const gain = audioCtx.createGain();
-        osc.type = 'square';
-        osc.frequency.setValueAtTime(880, audioCtx.currentTime);
-        gain.gain.setValueAtTime(0.5, audioCtx.currentTime);
-        osc.connect(gain);
-        gain.connect(audioCtx.destination);
-        osc.start();
-        osc.stop(audioCtx.currentTime + 0.3);
+        try {
+            if (!audioCtx) { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+            if (audioCtx.state === 'suspended') { audioCtx.resume(); }
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = 'square';
+            osc.frequency.setValueAtTime(880, audioCtx.currentTime);
+            gain.gain.setValueAtTime(0.5, audioCtx.currentTime);
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.3);
+        } catch(e){}
     }
 
-    function otomatikAlarmVeDevamsizlikKontrol(bugun, hrs, mins) {
+    function otomatikAlarmVeDevamsizlikKontrol(bugun, hrs, mins, secs) {
         const simdiMins = parseInt(hrs) * 60 + parseInt(mins);
-        let alarmTetiklendi = false;
+        const zamanKey = `${bugun}_${hrs}:${mins}`;
 
         document.querySelectorAll('.ders-kart').forEach(card => {
             const dersGun = card.getAttribute('data-gun');
             const dersSaatStr = card.getAttribute('data-alarm');
+            const cardId = card.id;
 
             if (dersSaatStr && (dersGun === "Her Gün" || dersGun === bugun)) {
                 const parts = dersSaatStr.split(':');
                 if (parts.length === 2) {
                     const dersMins = parseInt(parts[0]) * 60 + parseInt(parts[1]);
                     
-                    if (simdiMins >= (dersMins - 5) && simdiMins < dersMins) {
-                        alarmTetiklendi = true;
-                        card.classList.add('alarm-active');
-                    } else if (simdiMins >= dersMins && simdiMins <= dersMins + 5) {
-                        alarmTetiklendi = true;
-                        card.classList.add('alarm-active');
-                    } else {
-                        card.classList.remove('alarm-active');
+                    if (simdiMins === (dersMins - 5)) {
+                        const alarmKey = `${cardId}_${zamanKey}`;
+                        if (!calmisAlarmlar.has(alarmKey) && alarmKalanSaniye <= 0) {
+                            calmisAlarmlar.add(alarmKey);
+                            card.classList.add('alarm-active');
+                            alarmBaslat10Sn();
+                        }
                     }
                 }
             }
         });
+    }
 
+    function alarmBaslat10Sn() {
+        alarmKalanSaniye = 10;
         const banner = document.getElementById('alarmBanner');
-        if (alarmTetiklendi) {
-            banner.style.display = 'flex';
-            if (!alarmInterval) alarmInterval = setInterval(alarmSesiCal, 800);
-        } else {
-            banner.style.display = 'none';
-            if (alarmInterval) { clearInterval(alarmInterval); alarmInterval = null; }
+        const bannerText = document.getElementById('alarmBannerText');
+        banner.style.display = 'flex';
+
+        if (!alarmInterval) {
+            alarmInterval = setInterval(alarmSesiCal, 800);
         }
+
+        if (alarmCountdownTimer) clearInterval(alarmCountdownTimer);
+
+        bannerText.innerText = `🚨 DERS ALARMI! DERSİN BAŞLAMASINA 5 DAKİKA KALDI! (${alarmKalanSaniye} sn)`;
+
+        alarmCountdownTimer = setInterval(() => {
+            alarmKalanSaniye--;
+            if (alarmKalanSaniye > 0) {
+                bannerText.innerText = `🚨 DERS ALARMI! DERSİN BAŞLAMASINA 5 DAKİKA KALDI! (${alarmKalanSaniye} sn)`;
+            } else {
+                clearInterval(alarmCountdownTimer);
+                alarmCountdownTimer = null;
+                if (alarmInterval) {
+                    clearInterval(alarmInterval);
+                    alarmInterval = null;
+                }
+                if (!manualAlarmTetiklendi) {
+                    banner.style.display = 'none';
+                }
+                
+                document.querySelectorAll('.ders-kart').forEach(card => {
+                    card.classList.remove('alarm-active');
+                });
+            }
+        }, 1000);
     }
 
     function bilgiKopyala(zoomId, sifre) {
@@ -602,7 +698,24 @@ HTML_TEMPLATE = """
         window.open(`https://web.whatsapp.com/send?phone=${tel}&text=${msg}`, '_blank');
     }
 
-    setInterval(() => { fetch('/ping'); }, 10000);
+    setInterval(() => { 
+        fetch('/ping')
+        .then(r => r.json())
+        .then(data => {
+            manualAlarmTetiklendi = data.alarm || false;
+            const banner = document.getElementById('alarmBanner');
+            const bannerText = document.getElementById('alarmBannerText');
+            
+            if (manualAlarmTetiklendi) {
+                bannerText.innerText = "🚨 YÖNETİCİ ALARMI! LÜTFEN DERSE KATILIN!";
+                banner.style.display = 'flex';
+                if (!alarmInterval) alarmInterval = setInterval(alarmSesiCal, 800);
+            } else if (alarmKalanSaniye <= 0 && banner.style.display === 'flex' && bannerText.innerText.includes('YÖNETİCİ')) {
+                banner.style.display = 'none';
+                if (alarmInterval) { clearInterval(alarmInterval); alarmInterval = null; }
+            }
+        });
+    }, 3000); 
 
     function katil(kisi) {
         const statusDiv = document.getElementById('status');
@@ -655,15 +768,16 @@ HTML_TEMPLATE = """
         const sifre = document.getElementById('yeni_sifre').value.trim();
         const gun = document.getElementById('yeni_gun').value;
         const alarm = document.getElementById('yeni_alarm').value;
+        const bitis_saati = document.getElementById('yeni_bitis_saati').value;
 
         fetch('/ekle', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ sinif, grup, ders, ogretmen, id, sifre, gun, alarm })
+            body: JSON.stringify({ sinif, grup, ders, ogretmen, id, sifre, gun, alarm, bitis_saati })
         }).then(() => location.reload());
     }
 
-    function duzenleModalAc(key, sinif, grup, ders, ogretmen, id, sifre, gun, alarm) {
+    function duzenleModalAc(key, sinif, grup, ders, ogretmen, id, sifre, gun, alarm, bitis_saati) {
         document.getElementById('edit_kisi_key').value = key;
         document.getElementById('edit_sinif').value = sinif;
         document.getElementById('edit_grup').value = grup;
@@ -673,6 +787,7 @@ HTML_TEMPLATE = """
         document.getElementById('edit_sifre').value = sifre;
         document.getElementById('edit_gun').value = gun;
         document.getElementById('edit_alarm').value = alarm;
+        document.getElementById('edit_bitis_saati').value = bitis_saati;
         document.getElementById('editModal').style.display = 'flex';
     }
 
@@ -686,11 +801,12 @@ HTML_TEMPLATE = """
         const sifre = document.getElementById('edit_sifre').value;
         const gun = document.getElementById('edit_gun').value;
         const alarm = document.getElementById('edit_alarm').value;
+        const bitis_saati = document.getElementById('edit_bitis_saati').value;
 
         fetch('/duzenle', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ key, sinif, grup, ders, ogretmen, id, sifre, gun, alarm })
+            body: JSON.stringify({ key, sinif, grup, ders, ogretmen, id, sifre, gun, alarm, bitis_saati })
         }).then(() => location.reload());
     }
 
@@ -715,90 +831,78 @@ HTML_TEMPLATE = """
 </html>
 """
 
-def veri_yukle(dosya):
-    try:
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        path = os.path.join(script_dir, dosya)
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        if "katilimlar" in dosya:
-            return []
-        return {}
-
-def veri_kaydet(dosya, data):
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    path = os.path.join(script_dir, dosya)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=4)
-
 def arka_plan_devamsizlik_kontrol():
-    islenen_dakikalar = set()
+    """Arka planda periyodik olarak ders bitimlerini takip eden thread iş parçacığı."""
     while True:
         try:
             now = datetime.now()
             bugun = ["Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi", "Pazar"][now.weekday()]
             tarih_str = now.strftime("%d.%m.%Y")
-            simdiki_dakika_key = now.strftime("%Y-%m-%d-%H-%M")
 
-            if simdiki_dakika_key not in islenen_dakikalar:
-                rehber = veri_yukle("rehber.json")
-                users = veri_yukle("users.json")
-                katilimlar = veri_yukle("katilimlar.json")
-                if not isinstance(katilimlar, list):
-                    katilimlar = []
+            rehber = veri_yukle("rehber.json")
+            users = veri_yukle("users.json")
+            katilimlar = veri_yukle("katilimlar.json")
+            if not isinstance(katilimlar, list):
+                katilimlar = []
 
-                degisiklik_var = False
+            degisiklik_var = False
 
-                for key, ders in rehber.items():
-                    ders_gun = ders.get('gun', 'Her Gün')
-                    ders_saat_str = ders.get('alarm', '')
+            for key, ders in rehber.items():
+                ders_gun = ders.get('gun', 'Her Gün')
+                ders_saat_str = ders.get('alarm', '')
 
-                    if ders_saat_str and (ders_gun == 'Her Gün' or ders_gun == bugun):
-                        p = ders_saat_str.split(':')
-                        if len(p) == 2:
-                            ders_saat = now.replace(hour=int(p[0]), minute=int(p[1]), second=0, microsecond=0)
-                            sinir_saat = ders_saat + timedelta(minutes=5)
-                            
-                            if sinir_saat <= now < (sinir_saat + timedelta(minutes=1)):
-                                for uname, udata in users.items():
-                                    if uname.lower() == ADMIN_USERNAME.lower() or not isinstance(udata, dict):
-                                        continue
-                                    
-                                    if udata.get('sinif') == ders.get('sinif') and udata.get('grup') == ders.get('grup'):
-                                        giris_var = any(
-                                            k.get('kullanici', '').lower() == uname.lower() and 
-                                            k.get('tarih') == tarih_str and 
-                                            k.get('ders') == ders.get('ders')
-                                            for k in katilimlar
-                                        )
-                                        if not giris_var:
-                                            katilimlar.append({
-                                                "kullanici": uname,
-                                                "ogrenci_sinif_grup": f"{udata.get('sinif')} {udata.get('grup')}",
-                                                "ders": ders.get('ders'),
-                                                "ogretmen": ders.get('ogretmen'),
-                                                "tarih": tarih_str,
-                                                "saat": now.strftime("%H:%M:%S"),
-                                                "durum": "DEVAMSIZ"
-                                            })
-                                            degisiklik_var = True
-                                            
-                                            vel_tel = udata.get('veli_telefon')
-                                            if vel_tel:
-                                                mesaj = f"Sayın Veli, öğrenciniz {uname.upper()}, bugün {ders_saat_str} saatindeki {ders.get('ders')} dersine zamanında katılmamıştır."
-                                                whatsapp_mesaj_gonder(vel_tel, mesaj)
+                if ders_saat_str and (ders_gun == 'Her Gün' or ders_gun == bugun):
+                    p = ders_saat_str.split(':')
+                    if len(p) == 2:
+                        ders_saat = now.replace(hour=int(p[0]), minute=int(p[1]), second=0, microsecond=0)
+                        
+                        bitis_saat_str = ders.get('bitis_saati', '')
+                        if bitis_saat_str and ':' in bitis_saat_str:
+                            bp = bitis_saat_str.split(':')
+                            sinir_saat = now.replace(hour=int(bp[0]), minute=int(bp[1]), second=0, microsecond=0)
+                        else:
+                            sinir_saat = ders_saat + timedelta(minutes=40)
+                        
+                        if now >= sinir_saat and now.date() == ders_saat.date():
+                            ders_adi_std = (ders.get('ders') or key).strip().lower()
+                            key_std = key.strip().lower()
 
-                if degisiklik_var:
-                    veri_kaydet("katilimlar.json", katilimlar)
+                            for uname, udata in users.items():
+                                if uname.lower() == ADMIN_USERNAME.lower() or not isinstance(udata, dict):
+                                    continue
+                                
+                                if udata.get('sinif') == ders.get('sinif') and udata.get('grup') == ders.get('grup'):
+                                    giris_var = any(
+                                        k.get('kullanici', '').strip().lower() == uname.strip().lower() and 
+                                        k.get('tarih') == tarih_str and 
+                                        (k.get('ders', '').strip().lower() == ders_adi_std or k.get('ders', '').strip().lower() == key_std)
+                                        for k in katilimlar
+                                    )
+                                    if not giris_var:
+                                        katilimlar.append({
+                                            "kullanici": uname,
+                                            "ogrenci_sinif_grup": f"{udata.get('sinif')} {udata.get('grup')}",
+                                            "ders": (ders.get('ders') or key).title(),
+                                            "ogretmen": ders.get('ogretmen'),
+                                            "tarih": tarih_str,
+                                            "saat": now.strftime("%H:%M:%S"),
+                                            "ders_saati": ders_saat_str,
+                                            "durum": "DEVAMSIZ"
+                                        })
+                                        degisiklik_var = True
+                                        
+                                        vel_tel = udata.get('veli_telefon')
+                                        if vel_tel:
+                                            mesaj = f"Sayın Veli, öğrenciniz {uname.upper()}, bugün {ders_saat_str} saatindeki {ders.get('ders')} derse zamanında katılmadığı için devamsız yazılmıştır."
+                                            threading.Thread(target=whatsapp_mesaj_gonder, args=(vel_tel, mesaj), daemon=True).start()
 
-                islenen_dakikalar.add(simdiki_dakika_key)
-                if len(islenen_dakikalar) > 100:
-                    islenen_dakikalar.clear()
-        except Exception:
-            pass
+            if degisiklik_var:
+                veri_kaydet("katilimlar.json", katilimlar)
+
+        except Exception as e:
+            print(f"[HATA] Arka plan devamsızlık kontrolü: {e}")
         
-        time.sleep(30)
+        time.sleep(20)
 
 threading.Thread(target=arka_plan_devamsizlik_kontrol, daemon=True).start()
 
@@ -858,32 +962,85 @@ def ogrenci_istatistik(uname):
 
     return jsonify({"zamaninda": zamaninda, "gec": gec, "devamsiz": devamsiz})
 
-@app.route('/katilim_csv')
-def katilim_csv():
+@app.route('/katilim_excel')
+def katilim_excel():
     if session.get('user', '').lower() != ADMIN_USERNAME.lower():
         return redirect(url_for('ana_sayfa'))
     
     katilimlar = veri_yukle("katilimlar.json")
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow(['Tarih', 'Saat', 'Kullanici', 'Sinif_Grup', 'Ders', 'Ogretmen', 'Durum'])
+    gunler = {"Monday": "Pazartesi", "Tuesday": "Salı", "Wednesday": "Çarşamba", "Thursday": "Perşembe", "Friday": "Cuma", "Saturday": "Cumartesi", "Sunday": "Pazar"}
     
-    for k in katilimlar:
-        writer.writerow([
-            k.get('tarih', ''),
-            k.get('saat', ''),
-            k.get('kullanici', ''),
-            k.get('ogrenci_sinif_grup', ''),
-            k.get('ders', ''),
-            k.get('ogretmen', ''),
-            k.get('durum', '')
-        ])
-    
-    return Response(
-        output.getvalue(),
-        mimetype="text/csv",
-        headers={"Content-disposition": "attachment; filename=katilim_raporu.csv"}
-    )
+    try:
+        import openpyxl
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Katılım Raporu"
+        
+        headers = ['Öğrenci', 'Sınıf / Grup', 'Gün', 'Tarih', 'Ders Saati', 'Giriş Saati', 'Ders', 'Öğretmen', 'Durum']
+        ws.append(headers)
+        
+        for k in katilimlar:
+            tarih_str = k.get('tarih', '')
+            gun_adi = ""
+            try:
+                dt = datetime.strptime(tarih_str, "%d.%m.%Y")
+                gun_adi = gunler.get(dt.strftime("%A"), "")
+            except Exception:
+                pass
+                
+            ws.append([
+                k.get('kullanici', '').upper(),
+                k.get('ogrenci_sinif_grup', ''),
+                gun_adi,
+                tarih_str,
+                k.get('ders_saati', '--:--'),
+                k.get('saat', ''),
+                k.get('ders', ''),
+                k.get('ogretmen', ''),
+                k.get('durum', '')
+            ])
+            
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+        return Response(
+            output.read(),
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-disposition": "attachment; filename=katilim_raporu.xlsx"}
+        )
+    except ImportError:
+        output = io.StringIO(newline='')
+        writer = csv.writer(output)
+        
+        headers = ['Öğrenci', 'Sınıf / Grup', 'Gün', 'Tarih', 'Ders Saati', 'Giriş Saati', 'Ders', 'Öğretmen', 'Durum']
+        writer.writerow(headers)
+        
+        for k in katilimlar:
+            tarih_str = k.get('tarih', '')
+            gun_adi = ""
+            try:
+                dt = datetime.strptime(tarih_str, "%d.%m.%Y")
+                gun_adi = gunler.get(dt.strftime("%A"), "")
+            except Exception:
+                pass
+                
+            writer.writerow([
+                k.get('kullanici', '').upper(),
+                k.get('ogrenci_sinif_grup', ''),
+                gun_adi,
+                tarih_str,
+                k.get('ders_saati', '--:--'),
+                k.get('saat', ''),
+                k.get('ders', ''),
+                k.get('ogretmen', ''),
+                k.get('durum', '')
+            ])
+            
+        return Response(
+            output.getvalue().encode('utf-8-sig'),
+            mimetype="text/csv; charset=utf-8",
+            headers={"Content-disposition": "attachment; filename=katilim_raporu.csv"}
+        )
 
 @app.route('/katilim_temizle', methods=['POST'])
 def katilim_temizle():
@@ -903,13 +1060,26 @@ def alarm_durumlari():
 
 @app.route('/ping')
 def ping():
+    alarm_tetiklendi = False
     if 'user' in session:
         users = veri_yukle("users.json")
         u = session['user'].lower().strip()
+        is_admin = (u == ADMIN_USERNAME.lower())
+        
         if u in users and isinstance(users[u], dict):
             users[u]['last_seen'] = time.time()
             veri_kaydet("users.json", users)
-    return jsonify({"status": "ok"})
+            
+        rehber = veri_yukle("rehber.json")
+        for k, ders in rehber.items():
+            if ders.get('manual_alarm'):
+                if is_admin or (not is_admin and u in users and isinstance(users[u], dict) and 
+                                ders.get('sinif') == users[u].get('sinif') and 
+                                ders.get('grup') == users[u].get('grup')):
+                    alarm_tetiklendi = True
+                    break
+
+    return jsonify({"status": "ok", "alarm": alarm_tetiklendi})
 
 @app.route('/login', methods=['POST'])
 def login():
@@ -991,39 +1161,83 @@ def toplantiya_katil(kisi):
 
     now = datetime.now()
     ders_saat_str = bilgi.get('alarm', '')
+    tarih_str = now.strftime("%d.%m.%Y")
+    
     durum = "ZAMANINDA"
     if ders_saat_str:
         p = ders_saat_str.split(':')
         if len(p) == 2:
             ders_saat = now.replace(hour=int(p[0]), minute=int(p[1]), second=0, microsecond=0)
-            if now > ders_saat:
+            zamaninda_sinir = ders_saat + timedelta(minutes=5)
+            
+            bitis_saat_str = bilgi.get('bitis_saati', '')
+            if bitis_saat_str and ':' in bitis_saat_str:
+                bp = bitis_saat_str.split(':')
+                gec_sinir = now.replace(hour=int(bp[0]), minute=int(bp[1]), second=0, microsecond=0)
+            else:
+                gec_sinir = ders_saat + timedelta(minutes=40)
+            
+            if now <= zamaninda_sinir:
+                durum = "ZAMANINDA"
+            elif zamaninda_sinir < now <= gec_sinir:
                 durum = "GEC_KALDI"
+            else:
+                durum = "DEVAMSIZ"
 
-    log_kaydi = {
-        "kullanici": session['user'],
-        "ogrenci_sinif_grup": ogrenci_sinif_grup,
-        "ders": bilgi.get('ders', kisi).title(),
-        "ogretmen": bilgi.get('ogretmen', 'Öğretmen').title(),
-        "tarih": now.strftime("%d.%m.%Y"),
-        "saat": now.strftime("%H:%M:%S"),
-        "durum": durum
-    }
-    
     katilimlar = veri_yukle("katilimlar.json")
     if not isinstance(katilimlar, list): 
         katilimlar = []
-    katilimlar.append(log_kaydi)
+
+    # Standartlaştırılmış Ders ve Kullanıcı Karşılaştırması
+    ders_adi_std = (bilgi.get('ders') or hedef).strip().lower()
+    current_u = session['user'].strip().lower()
+
+    existing_idx = None
+    for idx, k in enumerate(katilimlar):
+        k_user = k.get('kullanici', '').strip().lower()
+        k_ders = k.get('ders', '').strip().lower()
+        if k_user == current_u and k.get('tarih') == tarih_str and (k_ders == ders_adi_std or k_ders == hedef):
+            existing_idx = idx
+            break
+
+    # Kayıt varsa mevcut kaydı güncelle, ALT ALTA MÜKERRER KAYIT EKLEME
+    if existing_idx is not None:
+        katilimlar[existing_idx]['durum'] = durum
+        katilimlar[existing_idx]['saat'] = now.strftime("%H:%M:%S")
+        katilimlar[existing_idx]['ogrenci_sinif_grup'] = ogrenci_sinif_grup
+    else:
+        log_kaydi = {
+            "kullanici": session['user'],
+            "ogrenci_sinif_grup": ogrenci_sinif_grup,
+            "ders": (bilgi.get('ders') or hedef).title(),
+            "ogretmen": bilgi.get('ogretmen', 'Öğretmen').title(),
+            "tarih": tarih_str,
+            "saat": now.strftime("%H:%M:%S"),
+            "ders_saati": ders_saat_str if ders_saat_str else "--:--",
+            "durum": durum
+        }
+        katilimlar.append(log_kaydi)
+
     veri_kaydet("katilimlar.json", katilimlar)
 
     zoom_url = f"zoommtg://zoom.us/join?confno={clean_id}&pwd={sifre}"
-    webbrowser.open(zoom_url)
+    try:
+        webbrowser.open(zoom_url)
+    except Exception as e:
+        print(f"[HATA] Zoom URL açılamadı: {e}")
 
-    if sifre:
-        pyperclip.copy(sifre)
-        time.sleep(2.5)
-        pyautogui.hotkey('ctrl', 'v')
-        time.sleep(0.2)
-        pyautogui.press('enter')
+    if GUI_AUTOMATION_AVAILABLE and sifre:
+        def otomatik_sifre_gir():
+            try:
+                pyperclip.copy(sifre)
+                time.sleep(2.5)
+                pyautogui.hotkey('ctrl', 'v')
+                time.sleep(0.2)
+                pyautogui.press('enter')
+            except Exception as e:
+                print(f"[HATA] Otomatik şifre girişi hatası: {e}")
+        
+        threading.Thread(target=otomatik_sifre_gir, daemon=True).start()
 
     return jsonify({"status": "success", "message": "Toplantıya bağlanıldı!"})
 
@@ -1036,13 +1250,14 @@ def kisi_ekle():
     ders, ogretmen = data.get('ders', '').strip(), data.get('ogretmen', '').strip()
     id_num, sifre = data.get('id', '').strip(), data.get('sifre', '').strip()
     gun, alarm = data.get('gun', 'Her Gün'), data.get('alarm', '')
+    bitis_saati = data.get('bitis_saati', '')
 
     anahtar = f"{sinif}_{grup}_{ders}_{ogretmen}".lower().replace(' ', '_')
     rehber = veri_yukle("rehber.json")
     rehber[anahtar] = {
         "sinif": sinif, "grup": grup, "ders": ders,
         "ogretmen": ogretmen if ogretmen else f"{ders} Öğretmeni",
-        "id": id_num, "sifre": sifre, "gun": gun, "alarm": alarm, "manual_alarm": False
+        "id": id_num, "sifre": sifre, "gun": gun, "alarm": alarm, "bitis_saati": bitis_saati, "manual_alarm": False
     }
     veri_kaydet("rehber.json", rehber)
     return jsonify({"status": "success"})
@@ -1058,6 +1273,7 @@ def kisi_duzenle():
     ders, ogretmen = data.get('ders', '').strip(), data.get('ogretmen', '').strip()
     id_num, sifre = data.get('id', '').strip(), data.get('sifre', '').strip()
     gun, alarm = data.get('gun', 'Her Gün'), data.get('alarm', '')
+    bitis_saati = data.get('bitis_saati', '')
 
     rehber = veri_yukle("rehber.json")
     if old_key in rehber: 
@@ -1066,7 +1282,7 @@ def kisi_duzenle():
     new_key = f"{sinif}_{grup}_{ders}_{ogretmen}".lower().replace(' ', '_')
     rehber[new_key] = {
         "sinif": sinif, "grup": grup, "ders": ders, "ogretmen": ogretmen,
-        "id": id_num, "sifre": sifre, "gun": gun, "alarm": alarm, "manual_alarm": False
+        "id": id_num, "sifre": sifre, "gun": gun, "alarm": alarm, "bitis_saati": bitis_saati, "manual_alarm": False
     }
     veri_kaydet("rehber.json", rehber)
     return jsonify({"status": "success"})
@@ -1100,5 +1316,4 @@ def kisi_sil(kisi):
     return jsonify({"status": "error"})
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5050)python server.py
-    
+    app.run(host='0.0.0.0', port=5050)

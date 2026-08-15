@@ -1,29 +1,9 @@
 {
-    "admin": {
-        "pwd": "1234",
-        "sinif": "Yönetim",
-        "grup": "Admin",
-        "last_seen": 1786125196.3261254
-    },
     "8 dahiler kağan": {
         "pwd": "kagan",
         "sinif": "8. Sınıf",
         "grup": "Dahiler",
-        "veli_telefon": "5058667296",
-        "last_seen": 1786126105.820954
-    },
-    "8 dahiler sidar": {
-        "pwd": "sidar",
-        "sinif": "8. Sınıf",
-        "grup": "Dahiler",
         "veli_telefon": "1111111111",
-        "last_seen": 1786124244.6185505
-    },
-    "8 hızlılar adullah": {
-        "pwd": "apo",
-        "sinif": "8. Sınıf",
-        "grup": "Hızlılar",
-        "veli_telefon": "2222222222",
-        "last_seen": 0
+        "last_seen": 1786194931.819113
     }
 }

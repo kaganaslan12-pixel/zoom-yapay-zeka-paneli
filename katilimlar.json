@@ -1,1 +1,22 @@
-[]
+[
+    {
+        "kullanici": "8 dahiler kağan",
+        "ogrenci_sinif_grup": "8. Sınıf Dahiler",
+        "ders": "Etüt",
+        "ogretmen": "Kenan Başsedir",
+        "tarih": "08.08.2026",
+        "saat": "16:09:57",
+        "ders_saati": "15:55",
+        "durum": "ZAMANINDA"
+    },
+    {
+        "kullanici": "admin",
+        "ogrenci_sinif_grup": " ",
+        "ders": "Etüt",
+        "ogretmen": "Kenan Başsedir",
+        "tarih": "08.08.2026",
+        "saat": "16:12:52",
+        "ders_saati": "16:09",
+        "durum": "ZAMANINDA"
+    }
+]

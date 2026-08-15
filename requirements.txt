@@ -1,1 +1,6 @@
-flask
+Flask
+openpyxl
+pyautogui
+pyperclip
+pycaw
+comtypes
